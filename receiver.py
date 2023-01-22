@@ -4,6 +4,8 @@ import asyncio
 import subprocess
 from starlette.requests import Request
 
+from constants import RECEIVER_KILL_KEY, KillOptions
+
 import ray
 from ray import serve
 from ray.experimental.state.api import list_actors
@@ -22,8 +24,8 @@ class Receiver:
 
     async def __call__(self, request: Request):
         request_json = await request.json()
-        kill_node = request_json.get("kill_node", "False")
-        if kill_node == "True":
+        kill_node = request_json.get(RECEIVER_KILL_KEY, KillOptions.SPARE)
+        if kill_node == KillOptions.KILL:
             print("Received kill request. Attempting to kill a node.")
             await asyncio.wait(
                 [
