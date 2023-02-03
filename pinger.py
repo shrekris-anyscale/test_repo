@@ -1,3 +1,4 @@
+import time
 import asyncio
 import requests
 from typing import Dict
@@ -6,10 +7,12 @@ from fastapi import FastAPI
 from constants import RECEIVER_KILL_KEY, KillOptions
 
 from ray import serve
+from ray.util.metrics import Counter, Gauge
 
 
+DEFAULT_BEARER_TOKEN = "default"
 DEFAULT_TARGET_URL = "http://google.com/"
-DEFAULT_KILL_INTERVAL = 1000
+DEFAULT_KILL_INTERVAL = 100000
 
 app = FastAPI()
 
@@ -19,6 +22,7 @@ app = FastAPI()
     route_prefix="/",
     user_config={
         "target_url": DEFAULT_TARGET_URL,
+        "bearer_token": DEFAULT_BEARER_TOKEN,
         "kill_interval": DEFAULT_KILL_INTERVAL,
     },
 )
@@ -27,6 +31,7 @@ class Pinger:
     def __init__(self):
         self.kill_interval = -1
         self.target_url = ""
+        self.bearer_token = ""
         self.live = False
         self.total_num_requests = 0
         self.total_successful_requests = 0
@@ -37,6 +42,34 @@ class Pinger:
         self.current_failed_requests = 0
         self.current_kill_requests = 0
         self.failed_responses = dict()
+
+        self.request_counter = Counter(
+            "num_requests",
+            description="Number of requests.",
+            tag_keys=("class",),
+        )
+        self.request_counter.set_default_tags({"class": "Pinger"})
+
+        self.success_counter = Counter(
+            "num_requests_succeeded",
+            description="Number of successful requests.",
+            tag_keys=("class",),
+        )
+        self.success_counter.set_default_tags({"class": "Pinger"})
+
+        self.fail_counter = Counter(
+            "num_requests_failed",
+            description="Number of failed requests.",
+            tag_keys=("class",),
+        )
+        self.fail_counter.set_default_tags({"class": "Pinger"})
+
+        self.latency_gauge = Gauge(
+            "request_latency",
+            description="Latency of last successful request.",
+            tag_keys=("class",),
+        )
+        self.gauge.set_default_tags({"class": "Pinger"})
 
     def reconfigure(self, config: Dict):
         self.stop_requesting()
@@ -50,6 +83,12 @@ class Pinger:
         new_target_url = config.get("target_url", DEFAULT_TARGET_URL)
         print(f'Changing target URL from "{self.target_url}" to "{new_target_url}"')
         self.target_url = new_target_url
+
+        new_bearer_token = config.get("bearer_token", DEFAULT_BEARER_TOKEN)
+        print(
+            f'Changing bearer token from "{self.bearer_token}" to "{new_bearer_token}"'
+        )
+        self.bearer_token = new_bearer_token
 
     @app.get("/")
     def root(self):
@@ -67,13 +106,27 @@ class Pinger:
                 if self.send_kill_request():
                     print("Sending kill request.")
                     json_payload = {RECEIVER_KILL_KEY: KillOptions.KILL}
-                response = requests.post(self.target_url, json=json_payload, timeout=3)
+
+                start_time = time.time()
+                response = requests.post(
+                    self.target_url,
+                    headers={"Authorization": f"Bearer {self.bearer_token}"},
+                    json=json_payload,
+                    timeout=3,
+                )
+                latency = time.time() - start_time
+
+                self.request_counter.inc()
                 if self.send_kill_request():
                     self.count_successful_request(kill_request=True)
+                    self.success_counter.inc()
                 elif response.status_code == 200:
                     self.count_successful_request()
+                    self.latency_gauge.set(latency)
+                    self.success_counter.inc()
                 else:
                     self.count_failed_request(response.status_code)
+                    self.fail_counter.inc()
                 if self.current_num_requests % 3 == 0:
                     print(
                         f"Sent {self.current_num_requests} "
