@@ -12,7 +12,7 @@ from ray.util.metrics import Counter, Gauge
 
 DEFAULT_BEARER_TOKEN = "default"
 DEFAULT_TARGET_URL = "http://google.com/"
-DEFAULT_KILL_INTERVAL = 100000
+DEFAULT_KILL_INTERVAL = 1000000
 
 app = FastAPI()
 
@@ -69,7 +69,7 @@ class Pinger:
             description="Latency of last successful request.",
             tag_keys=("class",),
         )
-        self.gauge.set_default_tags({"class": "Pinger"})
+        self.latency_gauge.set_default_tags({"class": "Pinger"})
 
     def reconfigure(self, config: Dict):
         self.stop_requesting()
@@ -172,7 +172,7 @@ class Pinger:
         self.current_failed_requests = 0
         self.current_kill_requests = 0
 
-    def count_successful_request(self, kill_request: bool):
+    def count_successful_request(self, kill_request: bool = False):
         self.total_num_requests += 1
         self.total_successful_requests += 1
         self.current_num_requests += 1
