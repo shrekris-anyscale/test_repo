@@ -41,31 +41,32 @@ class Pinger:
         self.current_successful_requests = 0
         self.current_failed_requests = 0
         self.current_kill_requests = 0
-        self.failed_responses = dict()
+        self.failed_response_counts = dict()
+        self.failed_response_reasons = dict()
 
         self.request_counter = Counter(
-            "num_requests",
+            "pinger_num_requests",
             description="Number of requests.",
             tag_keys=("class",),
         )
         self.request_counter.set_default_tags({"class": "Pinger"})
 
         self.success_counter = Counter(
-            "num_requests_succeeded",
+            "pinger_num_requests_succeeded",
             description="Number of successful requests.",
             tag_keys=("class",),
         )
         self.success_counter.set_default_tags({"class": "Pinger"})
 
         self.fail_counter = Counter(
-            "num_requests_failed",
+            "pinger_num_requests_failed",
             description="Number of failed requests.",
             tag_keys=("class",),
         )
         self.fail_counter.set_default_tags({"class": "Pinger"})
 
         self.latency_gauge = Gauge(
-            "request_latency",
+            "pinger_request_latency",
             description="Latency of last successful request.",
             tag_keys=("class",),
         )
@@ -108,29 +109,40 @@ class Pinger:
                     json_payload = {RECEIVER_KILL_KEY: KillOptions.KILL}
 
                 start_time = time.time()
-                response = requests.post(
-                    self.target_url,
-                    headers={"Authorization": f"Bearer {self.bearer_token}"},
-                    json=json_payload,
-                    timeout=3,
-                )
-                latency = time.time() - start_time
+                try:
+                    response = requests.post(
+                        self.target_url,
+                        headers={"Authorization": f"Bearer {self.bearer_token}"},
+                        json=json_payload,
+                        timeout=3,
+                    )
+                    latency = time.time() - start_time
 
-                self.request_counter.inc()
-                if self.send_kill_request():
-                    self.count_successful_request(kill_request=True)
-                    self.success_counter.inc()
-                elif response.status_code == 200:
-                    self.count_successful_request()
-                    self.latency_gauge.set(latency)
-                    self.success_counter.inc()
-                else:
-                    self.count_failed_request(response.status_code)
+                    self.request_counter.inc()
+                    if self.send_kill_request():
+                        self.count_successful_request(kill_request=True)
+                        self.success_counter.inc()
+                    elif response.status_code == 200:
+                        self.count_successful_request()
+                        self.latency_gauge.set(latency)
+                        self.success_counter.inc()
+                    else:
+                        self.count_failed_request(
+                            response.status_code, reason=response.text
+                        )
+                        self.fail_counter.inc()
+                    if self.current_num_requests % 3 == 0:
+                        print(
+                            f"{time.strftime('%b %d – %l:%M%p: ')}"
+                            f"Sent {self.current_num_requests} "
+                            f'requests to "{self.target_url}".'
+                        )
+                except Exception as e:
+                    self.count_failed_request(-1, reason=repr(e))
                     self.fail_counter.inc()
-                if self.current_num_requests % 3 == 0:
                     print(
-                        f"Sent {self.current_num_requests} "
-                        f'requests to "{self.target_url}".'
+                        f"{time.strftime('%b %d – %l:%M%p: ')}"
+                        f"Got exception: \n{repr(e)}"
                     )
                 await asyncio.sleep(2)
 
@@ -154,7 +166,8 @@ class Pinger:
             "Current successful requests": self.current_successful_requests,
             "Current failed requests": self.current_failed_requests,
             "Current kill requests": self.current_kill_requests,
-            "Failed response status codes": self.failed_responses,
+            "Failed response counts": self.failed_response_counts,
+            "Failed response reasons": self.failed_response_reasons,
         }
         return info
 
@@ -181,14 +194,18 @@ class Pinger:
             self.total_kill_requests += 1
             self.current_kill_requests += 1
 
-    def count_failed_request(self, status_code: int):
+    def count_failed_request(self, status_code: int, reason: str = ""):
         self.total_num_requests += 1
         self.total_failed_requests += 1
         self.current_num_requests += 1
         self.current_failed_requests += 1
-        self.failed_responses[status_code] = (
-            self.failed_responses.get(status_code, 0) + 1
+        self.failed_response_counts[status_code] = (
+            self.failed_response_counts.get(status_code, 0) + 1
         )
+        if status_code in self.failed_response_reasons:
+            self.failed_response_reasons[status_code].add(reason)
+        else:
+            self.failed_response_reasons[status_code] = set(reason)
 
 
 graph = Pinger.bind()
