@@ -65,6 +65,13 @@ class Pinger:
         )
         self.fail_counter.set_default_tags({"class": "Pinger"})
 
+        self.kill_counter = Counter(
+            "pinger_num_kill_requests_sent",
+            description="Number of kill requests sent.",
+            tag_keys=("class",),
+        )
+        self.kill_counter.set_default_tags({"class": "Pinger"})
+
         self.latency_gauge = Gauge(
             "pinger_request_latency",
             description="Latency of last successful request.",
@@ -107,6 +114,7 @@ class Pinger:
                 if self.send_kill_request():
                     print("Sending kill request.")
                     json_payload = {RECEIVER_KILL_KEY: KillOptions.KILL}
+                    self.kill_counter.inc()
 
                 start_time = time.time()
                 try:
@@ -144,6 +152,7 @@ class Pinger:
                         f"{time.strftime('%b %d – %l:%M%p: ')}"
                         f"Got exception: \n{repr(e)}"
                     )
+
                 await asyncio.sleep(2)
 
     @app.get("/stop")
